@@ -1,35 +1,70 @@
 import express from "express";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { createServer } from "@roychri/mcp-server-asana";
+import { spawn } from "child_process";
+import { createServer } from "http";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Health check
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "asana-mcp-server" });
 });
 
-// SSE endpoint – Claude connects here
-app.get("/sse", async (req, res) => {
+app.get("/sse", (req, res) => {
   const asanaToken = process.env.ASANA_ACCESS_TOKEN;
   if (!asanaToken) {
     res.status(500).json({ error: "ASANA_ACCESS_TOKEN not configured" });
     return;
   }
 
-  const transport = new SSEServerTransport("/message", res);
-  const server = createServer({ asanaAccessToken: asanaToken });
+  // SSE Headers setzen
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
 
-  await server.connect(transport);
+  // MCP-Prozess starten
+  const mcpProcess = spawn(
+    "npx",
+    ["-y", "@roychri/mcp-server-asana"],
+    {
+      env: { ...process.env, ASANA_ACCESS_TOKEN: asanaToken },
+      stdio: ["pipe", "pipe", "pipe"],
+    }
+  );
+
+  // stdout des MCP-Prozesses → SSE an Claude senden
+  mcpProcess.stdout.on("data", (data) => {
+    const lines = data.toString().split("\n").filter(Boolean);
+    for (const line of lines) {
+      res.write(`data: ${line}\n\n`);
+    }
+  });
+
+  mcpProcess.stderr.on("data", (data) => {
+    console.error("MCP stderr:", data.toString());
+  });
+
+  mcpProcess.on("close", (code) => {
+    console.log(`MCP process exited with code ${code}`);
+    res.end();
+  });
+
+  // Nachrichten von Claude → stdin des MCP-Prozesses
+  req.on("data", (data) => {
+    mcpProcess.stdin.write(data);
+  });
+
+  req.on("close", () => {
+    mcpProcess.kill();
+  });
 });
 
-// Message endpoint for client → server communication
-app.post("/message", express.json(), async (req, res) => {
+// POST /message – Claude sendet hier JSON-RPC Nachrichten
+app.post("/message", express.json(), (req, res) => {
+  // Wird bei SSE-Transport nicht benötigt, aber Claude erwartet den Endpunkt
   res.status(200).json({ received: true });
 });
 
 app.listen(PORT, () => {
-  console.log(`Asana MCP Server running on port ${PORT}`);
+  console.log(`Asana MCP Bridge running on port ${PORT}`);
 });
