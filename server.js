@@ -33,7 +33,7 @@ app.get("/sse", (req, res) => {
   // MCP Prozess starten
   const mcpProcess = spawn(
     "npx",
-    ["-y", "@roychri/mcp-server-asana"],
+    ["-y", "@cristip73/mcp-server-asana"],
     {
       env: { ...process.env, ASANA_ACCESS_TOKEN: asanaToken },
       stdio: ["pipe", "pipe", "pipe"],
