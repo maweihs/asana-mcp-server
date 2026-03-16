@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: asana-mcp-server
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ASANA_ACCESS_TOKEN
+        sync: false   # bedeutet: Wert wird manuell im Dashboard eingetragen, nicht im Repo gespeichert
