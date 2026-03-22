@@ -17,14 +17,15 @@ const requireAuth = (req, res, next) => {
     res.status(500).json({ error: "SERVER_ACCESS_TOKEN not configured" });
     return;
   }
-
-  if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+  
+  if (!token || token !== expectedToken) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
   next();
 };
+
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "asana-mcp-server" });
