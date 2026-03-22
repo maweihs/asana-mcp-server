@@ -10,14 +10,26 @@ const sessions = new Map();
 
 // Auth-Middleware
 const requireAuth = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
+  // /message Endpunkt wird über sessionId abgesichert
+  if (req.path === "/message") {
+    const sessionId = req.query.sessionId;
+    if (!sessionId || !sessions.has(sessionId)) {
+      res.status(401).json({ error: "Invalid session" });
+      return;
+    }
+    next();
+    return;
+  }
+
+  // /sse Endpunkt braucht token in der URL
+  const token = req.query.token;
   const expectedToken = process.env.SERVER_ACCESS_TOKEN;
 
   if (!expectedToken) {
     res.status(500).json({ error: "SERVER_ACCESS_TOKEN not configured" });
     return;
   }
-  
+
   if (!token || token !== expectedToken) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -25,7 +37,6 @@ const requireAuth = (req, res, next) => {
 
   next();
 };
-
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "asana-mcp-server" });
