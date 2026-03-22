@@ -6,31 +6,45 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Aktive Sessions speichern
 const sessions = new Map();
+
+// Auth-Middleware
+const requireAuth = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const expectedToken = process.env.SERVER_ACCESS_TOKEN;
+
+  if (!expectedToken) {
+    res.status(500).json({ error: "SERVER_ACCESS_TOKEN not configured" });
+    return;
+  }
+
+  if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  next();
+};
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "asana-mcp-server" });
 });
 
-app.get("/sse", (req, res) => {
+app.get("/sse", requireAuth, (req, res) => {
   const asanaToken = process.env.ASANA_ACCESS_TOKEN;
   if (!asanaToken) {
     res.status(500).json({ error: "ASANA_ACCESS_TOKEN not configured" });
     return;
   }
 
-  // SSE Headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.flushHeaders();
 
-  // Session ID generieren
   const sessionId = Math.random().toString(36).substring(2);
 
-  // MCP Prozess starten
   const mcpProcess = spawn(
     "npx",
     ["-y", "@cristip73/mcp-server-asana"],
@@ -42,10 +56,8 @@ app.get("/sse", (req, res) => {
 
   sessions.set(sessionId, mcpProcess);
 
-  // Endpoint für diese Session mitteilen
   res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`);
 
-  // MCP stdout → SSE
   mcpProcess.stdout.on("data", (data) => {
     const lines = data.toString().split("\n").filter(Boolean);
     for (const line of lines) {
@@ -64,13 +76,12 @@ app.get("/sse", (req, res) => {
   });
 
   req.on("close", () => {
-    console.log(`Client disconnected, killing session ${sessionId}`);
     mcpProcess.kill();
     sessions.delete(sessionId);
   });
 });
 
-app.post("/message", (req, res) => {
+app.post("/message", requireAuth, (req, res) => {
   const { sessionId } = req.query;
   const mcpProcess = sessions.get(sessionId);
 
@@ -79,8 +90,7 @@ app.post("/message", (req, res) => {
     return;
   }
 
-  const message = JSON.stringify(req.body);
-  mcpProcess.stdin.write(message + "\n");
+  mcpProcess.stdin.write(JSON.stringify(req.body) + "\n");
   res.status(202).json({ accepted: true });
 });
 
