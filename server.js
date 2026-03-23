@@ -1,5 +1,6 @@
 import express from "express";
 import { spawn } from "child_process";
+import crypto from "crypto";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8,9 +9,9 @@ app.use(express.json());
 
 const sessions = new Map();
 
-// Auth-Middleware
+// Auth middleware
 const requireAuth = (req, res, next) => {
-  // /message Endpunkt wird über sessionId abgesichert
+  // /message endpoint is secured via sessionId
   if (req.path === "/message") {
     const sessionId = req.query.sessionId;
     if (!sessionId || !sessions.has(sessionId)) {
@@ -21,7 +22,7 @@ const requireAuth = (req, res, next) => {
     return;
   }
 
-  // /sse Endpunkt braucht token in der URL
+  // /sse endpoint requires token in the URL
   const token = req.query.token;
   const expectedToken = process.env.SERVER_ACCESS_TOKEN;
 
@@ -55,7 +56,7 @@ app.get("/sse", requireAuth, (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.flushHeaders();
 
-  const sessionId = Math.random().toString(36).substring(2);
+  const sessionId = crypto.randomBytes(32).toString("hex");
 
   const mcpProcess = spawn(
     "npx",
@@ -65,6 +66,12 @@ app.get("/sse", requireAuth, (req, res) => {
       stdio: ["pipe", "pipe", "pipe"],
     }
   );
+
+  mcpProcess.on("error", (error) => {
+    console.error("Failed to start MCP process:", error);
+    sessions.delete(sessionId);
+    res.end();
+  });
 
   sessions.set(sessionId, mcpProcess);
 
@@ -81,15 +88,23 @@ app.get("/sse", requireAuth, (req, res) => {
     console.error("MCP stderr:", data.toString());
   });
 
+  let closed = false;
+
   mcpProcess.on("close", (code) => {
     console.log(`MCP process closed: ${code}`);
-    sessions.delete(sessionId);
-    res.end();
+    if (!closed) {
+      closed = true;
+      sessions.delete(sessionId);
+      res.end();
+    }
   });
 
   req.on("close", () => {
-    mcpProcess.kill();
-    sessions.delete(sessionId);
+    if (!closed) {
+      closed = true;
+      sessions.delete(sessionId);
+      mcpProcess.kill();
+    }
   });
 });
 
@@ -102,8 +117,14 @@ app.post("/message", requireAuth, (req, res) => {
     return;
   }
 
-  mcpProcess.stdin.write(JSON.stringify(req.body) + "\n");
-  res.status(202).json({ accepted: true });
+  try {
+    mcpProcess.stdin.write(JSON.stringify(req.body) + "\n");
+    res.status(202).json({ accepted: true });
+  } catch (error) {
+    console.error("Failed to write to MCP process:", error);
+    sessions.delete(sessionId);
+    res.status(500).json({ error: "Failed to forward message to session" });
+  }
 });
 
 app.listen(PORT, () => {
